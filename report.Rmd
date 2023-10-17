@@ -1,0 +1,101 @@
+---
+title: "Analysis of NYPD Incident Data"
+author: "J. Buchanan"
+date: "2023-10-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(tidyverse)
+library(lubridate)
+library(patchwork)
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+## Introduction
+
+This report addresses a set of data supplied by the New York Police Department, detailing all reported shooting incidents responded to by the NYPD between 2006 and 2022. In this report I analyze the location and time distribution of shooting incident data, as well as looking at long term trends in the shooting rates for the city. The data is first import from the City of New York website.
+
+```{r Raw Data Import}
+url = "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+
+data = read_csv(url)
+
+kable(data[1:5,1:5])
+```
+
+Several of the columns in the data set are out of scope for the analysis, so they are removed. Additionally, the "BORO" column will be changed to a categorical type rather than a string, and the date column will be changed to a date type instead of a string.
+
+```{r Cleaned Data}
+data <- data %>% mutate(BORO = as.factor(BORO), OCCUR_DATE = mdy(OCCUR_DATE)) %>% select(-c("LOC_OF_OCCUR_DESC", "PRECINCT", "JURISDICTION_CODE", "LOC_CLASSFCTN_DESC", "LOCATION_DESC", "STATISTICAL_MURDER_FLAG", "X_COORD_CD", "Y_COORD_CD", "Lon_Lat"))
+
+kable(data[1:5,])
+```
+
+## Data Analysis
+
+In exploring the data, I wanted to understand the dangers of different lifestyles in New York City. To begin with, I looked at the incident density with relation to geographic location.
+
+```{r Shooting Incident Density by Borough}
+ggplot(data = data, mapping = aes(x = Longitude, y = Latitude, color = BORO)) + geom_point(alpha = 0.5) + scale_colour_viridis_d() + theme_light() + ggtitle("Incident Distribution by Borough")
+```
+```{r Number of Shooting Incidents by Borough}
+ggplot(data = data, aes(BORO)) + geom_bar() + labs(x = "Borough", y = " ") + theme_light()
+```
+
+According to this map, the highest densities of shooting incidents are near the city centers of the Bronx, Brooklyn, and the north half of Manhattan. A bar chart confirms the actual dispersion of incidents, showing that the Bronx and Brooklyn have the highest rates of shooting incidents. The map also indicates that there is likely a finer grain to explore these areas, because there are often neighborhoods with high densities of shooting incidents that border neighborhoods with very low density of shooting incidents.
+
+The data set also included the date and time each incident took place, so next I wanted to find any correlation between time and the number of incidents.
+
+```{r Incident Count Wrapped Over 24 Hour Window}
+ggplot(data=data, aes(OCCUR_TIME)) + geom_histogram(bins = 24) + labs(x = "Time of Incident", y = "Number of Incidents") + theme_light()
+```
+
+As we might expect, there are far more shooting incidents at night, with a peak around midnight. The safest hours are between 7 am and 11 am. I wanted to know if shooting incidents are always perpetrated in the same hours, or if it is related to the amount of daylight. 
+
+```{r Monthly Distribution of Cases Since 2006 w/ Avg Time of Incident}
+data <- data %>% mutate(MONTH = month(OCCUR_DATE))
+
+monthly_data <- data %>% group_by(MONTH) %>% summarize(CASES = n_distinct(INCIDENT_KEY)) %>% select(MONTH, CASES) %>% mutate(MONTH = month.abb[MONTH])
+
+ggplot(data = monthly_data, mapping = aes(x = MONTH, y = CASES)) + geom_col() + scale_x_discrete("Month", breaks = 1:12) + scale_y_continuous("Cases Since 2006") + theme_light() + ggtitle("Incident Distribution by Month")
+```
+
+```{r}
+spring <- data %>% filter(MONTH %in% c(3,4,5))
+summer <- data %>% filter(MONTH %in% c(6,7,8))
+autumn <- data %>% filter(MONTH %in% c(9,10,11))
+winter <- data %>% filter(MONTH %in% c(12,1,2))
+
+p1 <- ggplot() + geom_histogram(data=spring, aes(OCCUR_TIME), bins = 24) + theme_light() + ggtitle("Spring")
+p2 <- ggplot() + geom_histogram(data=summer, aes(OCCUR_TIME), bins = 24) + theme_light() + ggtitle("Summer")
+p3 <- ggplot() + geom_histogram(data=autumn, aes(OCCUR_TIME), bins = 24) + theme_light() + ggtitle("Autumn")
+p4 <- ggplot() + geom_histogram(data=winter, aes(OCCUR_TIME), bins = 24) + theme_light() + ggtitle("Winter")
+
+p1 + p2 + p3 + p4 + plot_layout(ncol=2)
+```
+
+Aggregating the incidents by month, the incident count is fairly consistent across the year, with a few peaks in February and some of the warmer months, such as June and July. The seasonal breakdown shows that the timeline for number of incidents does change depending on the relative amount of daylight. Spring and Autumn are relatively similar, while in winter the incidents are spread much wider throughout the dark hours, and in Summer there is much fewer incidents well into the evening. Combined with slight peaks in the number of incidents in the warm months, we can make the tentative conclusion that Summer nights have the highest density of shooting incidents in the city.
+
+The last thing to explore is the trend of incidents in the city. Similar to before, the number of cases is aggregated across each year. Then that data is fed into a linear model to build a prediction about the future rates of shooting incidents.
+
+```{r}
+data <- data %>% mutate(YEAR = year(OCCUR_DATE))
+
+yearly_data <- data %>% group_by(YEAR) %>% summarize(CASES = n_distinct(INCIDENT_KEY)) %>% select(YEAR, CASES)
+
+mod <- lm(CASES ~ YEAR, data = yearly_data)
+
+summary(mod)
+
+yearly_data <- yearly_data %>% mutate(pred = predict(mod))
+
+yearly_data %>% ggplot() + geom_point(aes(x = YEAR, y = CASES, color = "data")) + geom_line(aes(x = YEAR, y = pred, color = "prediction")) + theme_light() + ggtitle("Yearly Trend of Incident Reports")
+```
+
+The trend line shows a definitive downward slope since the data set begins in 2006, reflecting a steep decline in shootings between 2006 and 2019. Early on the data set matches the prediction very well, but in the 2020s, shooting incident rates returned to their previous highs. Therefore, though the trend was previously very steep, the trend line has been leveled off somewhat due to the influx of incidents in recent years.
+
+## Conclusion
+
+While studying this data set, I ran into an interesting problem that relates closely to the issues of bias and ethics in data. I noticed that though there was a description for the victim in every incident, the description of the perpetrator is often missing. I initially wondered if there was a way to create a predictive model that could interpolate a description of the perpetrator based on the victims description. I quickly realized that this is a major issue for a few reasons. First, even if a model could be constructed, it would be impossible to use, as each incident will need to be studied individually due to the nuanced differences. Secondly, despite the viability of a model, it would be horribly unethical to try to use a prediction from a model to try to enforce justice. Even the process of tuning such a model would be far too vulnerable to personal bias. It was important for me to remember that this data set is not a meaningless set of numbers; there is real life meaning behind the numbers. I needed to focus on the objective meaning of the data to find my results.
